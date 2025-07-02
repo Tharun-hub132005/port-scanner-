@@ -1,0 +1,307 @@
+import socket
+import threading
+import argparse
+import sys
+import os
+
+# --- Configuration ---
+# Default timeout for each port connection attempt in seconds.
+DEFAULT_TIMEOUT = 1
+
+# A dictionary of commonly known ports and their associated services.
+# This helps in providing more descriptive output.
+COMMON_PORTS = {
+    21: "FTP (File Transfer Protocol)",
+    22: "SSH (Secure Shell)",
+    23: "Telnet",
+    25: "SMTP (Simple Mail Transfer Protocol)",
+    53: "DNS (Domain Name System)",
+    80: "HTTP (Hypertext Transfer Protocol)",
+    110: "POP3 (Post Office Protocol v3)",
+    139: "NetBIOS-SSN (NetBIOS Session Service)",
+    143: "IMAP (Internet Message Access Protocol)",
+    443: "HTTPS (HTTP Secure)",
+    445: "SMB (Server Message Block) / Microsoft-DS",
+    3306: "MySQL",
+    3389: "RDP (Remote Desktop Protocol)",
+    5432: "PostgreSQL",
+    5900: "VNC (Virtual Network Computing)",
+    8080: "HTTP Proxy / Alternate HTTP",
+    8443: "HTTPS (Alternate)",
+}
+
+# --- Helper Functions ---
+def is_valid_ip(address):
+    """
+    Checks if the provided string is a valid IPv4 or IPv6 address.
+    Args:
+        address (str): The string to check.
+    Returns:
+        bool: True if valid IP, False otherwise.
+    """
+    try:
+        socket.inet_pton(socket.AF_INET, address) # Check for IPv4
+    except socket.error:
+        try:
+            socket.inet_pton(socket.AF_INET6, address) # Check for IPv6
+        except socket.error:
+            return False
+    return True
+
+def get_hostname(ip_address):
+    """
+    Attempts to resolve an IP address to a hostname using reverse DNS lookup.
+    Args:
+        ip_address (str): The IP address to resolve.
+    Returns:
+        str: The hostname if resolved, "N/A" otherwise.
+    """
+    try:
+        # gethostbyaddr returns (hostname, aliaslist, ipaddrlist)
+        return socket.gethostbyaddr(ip_address)[0]
+    except socket.herror:
+        return "N/A" # Host not found for the given IP
+
+def display_banner():
+    """
+    Displays a simple ASCII art banner for the tool.
+    """
+    print(r"""
+    ____                  __        __
+   / __ \____  ___  ____ / /____ _ / /_ ___   _____
+  / /_/ / __ \/ _ \/ __// __// __ `// __// _ \ / ___/
+ / ____// / / / __/ /__ / /_ / /_/ // /_ / __// /
+/_/    /_/ /_/\___/\___//_/__//____/ \__//___//_/
+                                    Port Scanner & Basic VA
+    """)
+    print("-" * 50)
+    print("A simple script for listing open ports and basic assessment.")
+    print("Use responsibly and with explicit permission.")
+    print("-" * 50)
+
+# --- Core Scanner Logic ---
+class PortScanner:
+    """
+    A class to encapsulate the port scanning functionality.
+    Handles target resolution, multi-threaded scanning, and result reporting.
+    """
+    def __init__(self, target, timeout=DEFAULT_TIMEOUT):
+        """
+        Initializes the PortScanner.
+        Args:
+            target (str): The target IP address or hostname.
+            timeout (float): The connection timeout for each port.
+        """
+        self.target = target
+        self.timeout = timeout
+        self.open_ports = [] # List to store identified open ports
+        self.lock = threading.Lock() # A lock to ensure thread-safe access to open_ports
+
+        try:
+            # Resolve the target hostname to an IP address.
+            self.target_ip = socket.gethostbyname(target)
+        except socket.gaierror:
+            print(f"Error: Could not resolve target '{target}'. Please check the hostname or IP address.")
+            sys.exit(1) # Exit if target cannot be resolved
+        
+        # Attempt to get the hostname from the resolved IP for better reporting.
+        self.target_hostname = get_hostname(self.target_ip)
+
+    def scan_port(self, port):
+        """
+        Attempts to connect to a specific port on the target.
+        If the connection is successful, the port is considered open.
+        Args:
+            port (int): The port number to scan.
+        """
+        try:
+            # Create a new socket for each port scan.
+            # AF_INET for IPv4, SOCK_STREAM for TCP.
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(self.timeout) # Set the connection timeout
+
+            # connect_ex returns 0 on success, or an error indicator otherwise.
+            # This is non-blocking and doesn't raise an exception for refusal.
+            result = sock.connect_ex((self.target_ip, port))
+            
+            if result == 0: # If connection successful (port is open)
+                with self.lock: # Acquire lock before modifying shared resource
+                    self.open_ports.append(port)
+            sock.close() # Always close the socket
+        except socket.error as e:
+            # Catch other socket-related errors (e.g., network unreachable).
+            # For closed ports, connect_ex handles it, so this is for unexpected errors.
+            # print(f"Debug: Error scanning port {port}: {e}") # Uncomment for verbose debugging
+            pass # Suppress common connection errors for closed/filtered ports
+
+    def start_scan(self, ports_to_scan):
+        """
+        Initiates the port scanning process using multiple threads.
+        Each port scan is run in a separate thread for concurrency.
+        Args:
+            ports_to_scan (list): A list of port numbers to scan.
+        """
+        threads = []
+        print(f"\n[*] Starting scan on {self.target} ({self.target_ip})...")
+        if self.target_hostname != "N/A" and self.target_hostname != self.target_ip:
+             print(f"[*] Hostname: {self.target_hostname}")
+        print(f"[*] Timeout per port: {self.timeout} seconds")
+        print(f"[*] Scanning {len(ports_to_scan)} ports.")
+        print("-" * 50)
+        print("Please wait, scanning in progress. This might take a while depending on the number of ports and timeout.")
+
+        for port in ports_to_scan:
+            # Create a new thread for each port scan.
+            thread = threading.Thread(target=self.scan_port, args=(port,))
+            threads.append(thread)
+            thread.start() # Start the thread
+
+        # Wait for all threads to complete their execution.
+        for thread in threads:
+            thread.join()
+
+        self.open_ports.sort() # Sort the open ports numerically for cleaner output
+        self.report_results() # Display the scan results
+
+    def report_results(self):
+        """
+        Prints a summary of the scan results, including open ports and
+        basic vulnerability assessment insights.
+        """
+        print("\n" + "=" * 50)
+        if self.open_ports:
+            print(f"[+] Open Ports found on {self.target} ({self.target_ip}):")
+            for port in self.open_ports:
+                # Get the service name from the COMMON_PORTS dictionary, or "Unknown Service".
+                service = COMMON_PORTS.get(port, "Unknown Service")
+                print(f"    - Port {port:<5} ({service})")
+            
+            print("\n[!] Basic Vulnerability Assessment Clues:")
+            print("    - Open ports indicate active services running on the target system.")
+            print("    - Each open service (e.g., FTP, SSH, HTTP) might have known vulnerabilities (CVEs).")
+            print("      Research the specific versions of these services for publicly disclosed exploits.")
+            print("    - Default credentials are a common attack vector for many services (e.g., FTP, Telnet, RDP).")
+            print("    - Outdated software versions running on these ports are frequently vulnerable to attacks.")
+            print("    - Unnecessary open ports increase the 'attack surface' of a system; close unused ones.")
+            print("    - Services like Telnet (23) and FTP (21) often transmit data in plaintext, making them vulnerable to eavesdropping.")
+            print("      Consider using secure alternatives like SSH (22) for remote access and SFTP/FTPS for file transfer.")
+            print("    - Remote Desktop (3389) and VNC (5900) should be secured with strong, unique passwords and Multi-Factor Authentication (MFA) if exposed to untrusted networks.")
+            print("    - SMB (445) can be highly vulnerable to attacks like EternalBlue if the underlying Windows system is not patched.")
+            print("    - Web servers (80, 443, 8080) might be vulnerable to common web application flaws (e.g., SQL Injection, XSS, insecure configurations).")
+        else:
+            print(f"[-] No open ports found on {self.target} ({self.target_ip}) within the scanned range and timeout.")
+            print("\n[*] Considerations for 'No Open Ports' result:")
+            print("    - The target might be protected by a firewall blocking all scanned ports.")
+            print("    - The target system might be offline or unreachable.")
+            print("    - The timeout might be too short for slow networks or unresponsive hosts.")
+            print("    - The scanned port range might not include the active ports.")
+            print("    - Try increasing the timeout (`-t`) or scanning a wider range (`-p`) if you suspect open ports.")
+        print("=" * 50)
+
+# --- Command-Line Interface ---
+def main():
+    """
+    Main function to parse command-line arguments and initiate the scan.
+    """
+    display_banner()
+
+    parser = argparse.ArgumentParser(
+        description="""A simple multi-threaded TCP port scanner for basic network vulnerability assessment.
+
+Examples:
+  python port_scanner.py 192.168.1.1 -c
+  python port_scanner.py example.com -p 22,80,443
+  python port_scanner.py 10.0.0.5 -p 1-1024 -t 0.5
+  python port_scanner.py localhost
+        """,
+        formatter_class=argparse.RawTextHelpFormatter # Preserves newlines in description
+    )
+    parser.add_argument(
+        "target",
+        help="The target IP address or hostname to scan (e.g., 192.168.1.1 or example.com)."
+    )
+    parser.add_argument(
+        "-p", "--ports",
+        help="""Ports to scan. Can be:
+  - A single port (e.g., 80)
+  - A comma-separated list (e.g., 21,22,80,443)
+  - A range (e.g., 1-1024)
+  Defaults to scanning ports 1-1024 if not specified, unless --common-ports is used.""",
+        default=None
+    )
+    parser.add_argument(
+        "-t", "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"Connection timeout in seconds for each port. Default: {DEFAULT_TIMEOUT}s."
+    )
+    parser.add_argument(
+        "-c", "--common-ports",
+        action="store_true",
+        help="Scan only a predefined list of commonly known ports. This option overrides -p/--ports if used.",
+        default=False
+    )
+    # parser.add_argument( # Placeholder for future verbose implementation
+    #     "-v", "--verbose",
+    #     action="store_true",
+    #     help="Enable verbose output (e.g., showing closed ports).",
+    #     default=False
+    # )
+
+    args = parser.parse_args()
+
+    # Determine the list of ports to scan based on user arguments.
+    ports_to_scan = []
+    if args.common_ports:
+        ports_to_scan = list(COMMON_PORTS.keys())
+        print(f"[*] Using common ports for scan.")
+    elif args.ports:
+        parts = args.ports.split(',')
+        for part in parts:
+            if '-' in part: # Handle port ranges (e.g., 1-1024)
+                try:
+                    start, end = map(int, part.split('-'))
+                    if not (1 <= start <= 65535 and 1 <= end <= 65535 and start <= end):
+                        print(f"Error: Invalid port range '{part}'. Ports must be between 1 and 65535.")
+                        sys.exit(1)
+                    ports_to_scan.extend(range(start, end + 1))
+                except ValueError:
+                    print(f"Error: Invalid port range format '{part}'. Use 'start-end'.")
+                    sys.exit(1)
+            else: # Handle single ports (e.g., 80)
+                try:
+                    port = int(part)
+                    if not (1 <= port <= 65535):
+                        print(f"Error: Invalid port '{port}'. Ports must be between 1 and 65535.")
+                        sys.exit(1)
+                    ports_to_scan.append(port)
+                except ValueError:
+                    print(f"Error: Invalid port format '{part}'. Use a number or a range.")
+                    sys.exit(1)
+        # Remove duplicates and sort the list of ports.
+        ports_to_scan = sorted(list(set(ports_to_scan)))
+        print(f"[*] Using specified ports for scan.")
+    else:
+        # Default behavior: scan the first 1024 well-known ports if no options are given.
+        print("[*] No specific ports or common ports selected. Defaulting to scanning ports 1-1024.")
+        print("    Consider using '-p' or '-c' for a more targeted or comprehensive scan.")
+        ports_to_scan = list(range(1, 1025))
+
+    if not ports_to_scan:
+        print("Error: No ports specified to scan. Exiting.")
+        sys.exit(1)
+    
+    # Initialize and start the scanner.
+    scanner = PortScanner(args.target, args.timeout)
+    scanner.start_scan(ports_to_scan)
+
+if __name__ == "__main__":
+    # Entry point of the script.
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nScan interrupted by user (Ctrl+C). Exiting.")
+        sys.exit(0) # Exit cleanly on user interruption
+    except Exception as e:
+        print(f"\nAn unexpected error occurred: {e}")
+        sys.exit(1) # Exit with an error code for unhandled exceptions
