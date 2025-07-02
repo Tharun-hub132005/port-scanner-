@@ -1,8 +1,8 @@
 ## Port Scanner Using Pytho ##
 # Requirements:
- * 1 Python
- * 1 socket and threading modules
-* 1 Command-line interface
+ *  Python
+ * socket and threading modules
+*  Command-line interface
 # Ethical Hacking: 
 Using tools like port scanners requires permission from the network owner. Unauthorized scanning can be illegal and unethical. This script is for educational purposes and responsible use only.
 
@@ -19,3 +19,35 @@ While threading helps, scanning a large range of ports on many hosts can still b
 * Save:Save the code as a Python file (e.g., port_scanner.py).
 
 * Open Terminal/Command Prompt: Navigate to the directory where you saved the file.
+* Run:
+* Scan a specific IP with default common ports (recommended for quick checks):
+* Bash
+
+python port_scanner.py your_target_ip_or_hostname -c
+# Scan a specific IP for a single port:
+
+* Bash
+
+python port_scanner.py your_target_ip -p 22
+# Scan a specific IP for a list of ports:
+
+ * Bash
+
+python port_scanner.py your_target_ip -p 21,22,80,443
+# Scan a specific IP for a range of ports:
+
+* Bash
+
+python port_scanner.py your_target_ip -p 1-1024
+Scan with a custom timeout:
+
+* Bash
+
+python port_scanner.py your_target_ip -p 1-100 -t 0.5
+# Scan a hostname:
+
+Bash
+
+python port_scanner.py example.com -c
+
+
